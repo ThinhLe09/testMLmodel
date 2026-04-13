@@ -5,14 +5,13 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
-from Box.config import CONFIG
 from utils.preprocessing import find_image_path, preprocess_vietnamese
 
 
 class ViVQADataset(Dataset):
     """Dataset cho giai đoạn huấn luyện đa nhiệm (VQA + BBox)."""
 
-    def __init__(self, dataframe, image_dir, blip_processor, tokenizer, label_encoder, unk_token_id):
+    def __init__(self, dataframe, image_dir, blip_processor, tokenizer, label_encoder, unk_token_id, config):
         self.data = dataframe
         self.image_dir = image_dir
         self.blip_processor = blip_processor
@@ -20,6 +19,7 @@ class ViVQADataset(Dataset):
         self.label_encoder = label_encoder
         self.unk_token_id = unk_token_id
         self.known_classes = set(label_encoder.classes_)
+        self.config = config
 
     def __len__(self):
         return len(self.data)
@@ -60,7 +60,7 @@ class ViVQADataset(Dataset):
         question = preprocess_vietnamese(row['question'])
         text_encoding = self.tokenizer(
             question, return_tensors="pt", padding="max_length",
-            truncation=True, max_length=CONFIG['max_length'], add_special_tokens=True
+            truncation=True, max_length=self.config['max_length'], add_special_tokens=True
         )
 
         answer = str(row['answer']).lower().strip()
@@ -80,11 +80,12 @@ class ViVQADataset(Dataset):
 class ViVQAMultiTaskInferenceDataset(Dataset):
     """Dataset cho giai đoạn inference đa nhiệm."""
 
-    def __init__(self, dataframe, image_dir, blip_processor, tokenizer):
+    def __init__(self, dataframe, image_dir, blip_processor, tokenizer, config):
         self.data = dataframe
         self.image_dir = image_dir
         self.blip_processor = blip_processor
         self.tokenizer = tokenizer
+        self.config = config
 
     def __len__(self):
         return len(self.data)
@@ -109,7 +110,7 @@ class ViVQAMultiTaskInferenceDataset(Dataset):
         processed_q = preprocess_vietnamese(question_text)
         text_encoding = self.tokenizer(
             processed_q, return_tensors="pt", padding="max_length",
-            truncation=True, max_length=CONFIG['max_length'], add_special_tokens=True
+            truncation=True, max_length=self.config['max_length'], add_special_tokens=True
         )
 
         return {

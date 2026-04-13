@@ -3,7 +3,6 @@ import torch.nn as nn
 import pandas as pd
 from transformers import Blip2Model, AutoModel
 
-from V4.config import CONFIG
 from utils.fusion import CrossAttentionFusion
 
 
@@ -60,16 +59,16 @@ class PhoBERT_BLIP2_VQA_Hierarchical(nn.Module):
         - Answer classifier head + Type Mask: phân loại câu trả lời có kiểm soát.
     """
 
-    def __init__(self, num_classes, num_q_types, answer_type_mask):
+    def __init__(self, num_classes, num_q_types, answer_type_mask, config):
         super().__init__()
 
         # Image Encoder (chỉ dùng vision encoder, không qua Q-Former)
-        self.blip = Blip2Model.from_pretrained(CONFIG['blip_model'], torch_dtype=torch.float16)
+        self.blip = Blip2Model.from_pretrained(config['blip_model'], torch_dtype=torch.float16)
         for param in self.blip.parameters():
             param.requires_grad = False
 
         # Text Encoder
-        self.phobert = AutoModel.from_pretrained(CONFIG['text_model'])
+        self.phobert = AutoModel.from_pretrained(config['text_model'])
 
         # Fusion (visual_dim=1408 vì dùng raw vision features)
         embed_dim = 768

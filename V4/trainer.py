@@ -8,20 +8,19 @@ from sklearn.model_selection import train_test_split
 from transformers import Blip2Processor, AutoTokenizer, get_linear_schedule_with_warmup
 from torch.cuda.amp import autocast, GradScaler
 
-from V4.config import CONFIG
 from V4.dataset import ViVQADataset
 from V4.model import PhoBERT_BLIP2_VQA_Hierarchical, create_answer_type_mask
 from utils.early_stopping import EarlyStopping
 
 
-def train():
-    print(f"Device: {CONFIG['device']}")
-    blip_processor = Blip2Processor.from_pretrained(CONFIG['blip_model'])
-    tokenizer = AutoTokenizer.from_pretrained(CONFIG['text_model'], use_fast=False)
+def train(config):
+    print(f"Device: {config['device']}")
+    blip_processor = Blip2Processor.from_pretrained(config['blip_model'])
+    tokenizer = AutoTokenizer.from_pretrained(config['text_model'], use_fast=False)
 
     # --- Load và split dữ liệu ---
     print(">>> Đang tải dữ liệu Train gốc...")
-    full_train_df = pd.read_csv(CONFIG['train_csv'])
+    full_train_df = pd.read_csv(config['train_csv'])
 
     # Tách 10% tập train gốc làm Validation, stratify theo 'type'
     try:
@@ -42,32 +41,33 @@ def train():
     unk_token_id = label_encoder.transform(['unknown'])[0]
 
     # --- DataLoaders ---
+    num_workers = config.get('num_workers', 0)
     train_loader = DataLoader(
-        ViVQADataset(train_df, CONFIG['train_img_dir'], blip_processor, tokenizer, label_encoder, unk_token_id),
-        batch_size=CONFIG['batch_size'], shuffle=True, num_workers=0, pin_memory=True,
+        ViVQADataset(train_df, config['train_img_dir'], blip_processor, tokenizer, label_encoder, unk_token_id, config),
+        batch_size=config['batch_size'], shuffle=True, num_workers=num_workers, pin_memory=True,
     )
     # Val dùng ảnh từ train_img_dir vì được tách từ train ra
     val_loader = DataLoader(
-        ViVQADataset(val_df, CONFIG['train_img_dir'], blip_processor, tokenizer, label_encoder, unk_token_id),
-        batch_size=CONFIG['batch_size'], shuffle=False, num_workers=0, pin_memory=True,
+        ViVQADataset(val_df, config['train_img_dir'], blip_processor, tokenizer, label_encoder, unk_token_id, config),
+        batch_size=config['batch_size'], shuffle=False, num_workers=num_workers, pin_memory=True,
     )
 
     # --- Tạo Mask (đặc trưng V4) ---
     num_q_types = int(full_train_df['type'].max() + 1)
-    type_mask_tensor = create_answer_type_mask(CONFIG['type_mapping_csv'], label_encoder, num_q_types)
-    type_mask_tensor = type_mask_tensor.to(CONFIG['device'])
+    type_mask_tensor = create_answer_type_mask(config['type_mapping_csv'], label_encoder, num_q_types)
+    type_mask_tensor = type_mask_tensor.to(config['device'])
 
     # --- Khởi tạo Model ---
     print("Initializing Hierarchical Model V4...")
     model = PhoBERT_BLIP2_VQA_Hierarchical(
-        len(label_encoder.classes_), num_q_types, type_mask_tensor
-    ).to(CONFIG['device'])
+        len(label_encoder.classes_), num_q_types, type_mask_tensor, config
+    ).to(config['device'])
 
     optimizer = torch.optim.AdamW(
         filter(lambda p: p.requires_grad, model.parameters()),
-        lr=CONFIG['lr'], weight_decay=CONFIG['weight_decay'],
+        lr=config['lr'], weight_decay=config['weight_decay'],
     )
-    total_steps = len(train_loader) * CONFIG['epochs']
+    total_steps = len(train_loader) * config['epochs']
     scheduler = get_linear_schedule_with_warmup(
         optimizer,
         num_warmup_steps=int(0.1 * total_steps),
@@ -78,15 +78,15 @@ def train():
     criterion_ans = nn.CrossEntropyLoss(reduction='none', label_smoothing=0.1)
     criterion_type = nn.CrossEntropyLoss()
 
-    type_weight_tensor = torch.ones(num_q_types, device=CONFIG['device'])
-    for t, w in CONFIG['type_loss_weights'].items():
+    type_weight_tensor = torch.ones(num_q_types, device=config['device'])
+    for t, w in config['type_loss_weights'].items():
         if t < num_q_types:
             type_weight_tensor[t] = w
 
     scaler = GradScaler()
-    early_stopping = EarlyStopping(patience=CONFIG['patience'], path=CONFIG['save_path'])
+    early_stopping = EarlyStopping(patience=config['patience'], path=config['save_path'])
 
-    print(f"Type loss weights: {CONFIG['type_loss_weights']}")
+    print(f"Type loss weights: {config['type_loss_weights']}")
     print("Bắt đầu huấn luyện...")
 
     for epoch in range(CONFIG['epochs']):
@@ -99,11 +99,11 @@ def train():
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}")
         for batch in pbar:
-            pixel_values = batch['pixel_values'].to(CONFIG['device'], dtype=torch.float16)
-            input_ids = batch['input_ids'].to(CONFIG['device'])
-            attention_mask = batch['attention_mask'].to(CONFIG['device'])
-            labels = batch['labels'].to(CONFIG['device'])
-            q_type_labels = batch['q_type'].to(CONFIG['device'])
+            pixel_values = batch['pixel_values'].to(config['device'], dtype=torch.float16)
+            input_ids = batch['input_ids'].to(config['device'])
+            attention_mask = batch['attention_mask'].to(config['device'])
+            labels = batch['labels'].to(config['device'])
+            q_type_labels = batch['q_type'].to(config['device'])
 
             optimizer.zero_grad()
             with autocast():
@@ -117,7 +117,7 @@ def train():
                 loss_ans = (per_sample_loss * sample_weights).mean()
 
                 loss_type = criterion_type(type_logits, q_type_labels)
-                total_loss = loss_ans + (CONFIG['lambda_type'] * loss_type)
+                total_loss = loss_ans + (config['lambda_type'] * loss_type)
 
             scaler.scale(total_loss).backward()
             scaler.step(optimizer)
@@ -146,11 +146,11 @@ def train():
 
         with torch.no_grad(), autocast():
             for batch in val_loader:
-                pixel_values = batch['pixel_values'].to(CONFIG['device'], dtype=torch.float16)
-                input_ids = batch['input_ids'].to(CONFIG['device'])
-                attention_mask = batch['attention_mask'].to(CONFIG['device'])
-                labels = batch['labels'].to(CONFIG['device'])
-                q_type_labels = batch['q_type'].to(CONFIG['device'])
+                pixel_values = batch['pixel_values'].to(config['device'], dtype=torch.float16)
+                input_ids = batch['input_ids'].to(config['device'])
+                attention_mask = batch['attention_mask'].to(config['device'])
+                labels = batch['labels'].to(config['device'])
+                q_type_labels = batch['q_type'].to(config['device'])
 
                 ans_logits, type_logits = model(pixel_values, input_ids, attention_mask)
 
@@ -177,7 +177,7 @@ def train():
         for t in range(num_q_types):
             tr_acc = train_type_ans_correct[t] / train_type_ans_total[t] if train_type_ans_total[t] > 0 else 0
             vl_acc = val_type_ans_correct[t] / val_type_ans_total[t] if val_type_ans_total[t] > 0 else 0
-            w = CONFIG['type_loss_weights'].get(t, 1.0)
+            w = config['type_loss_weights'].get(t, 1.0)
             marker = " <<<" if w > 1.0 else ""
             print(f"    Type {t} (w={w}): Train={tr_acc:.4f} | Val={vl_acc:.4f}{marker}")
 

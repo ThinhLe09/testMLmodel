@@ -3,7 +3,6 @@ import torch.nn as nn
 from torchvision import models
 from transformers import Blip2Model, AutoModel
 
-from Box.config import CONFIG
 from utils.fusion import CrossAttentionFusion
 
 
@@ -19,12 +18,12 @@ class PhoBERT_BLIP2_EfficientNet_MultiTask(nn.Module):
         - BBox head: hồi quy tọa độ bounding box (chuẩn hóa [0, 1]).
     """
 
-    def __init__(self, num_classes, num_q_types):
+    def __init__(self, num_classes, num_q_types, config):
         super().__init__()
 
         # --- BLIP-2 ---
         print("⏳ Đang load BLIP-2...")
-        tmp_blip = Blip2Model.from_pretrained(CONFIG['blip_model'], torch_dtype=torch.float16)
+        tmp_blip = Blip2Model.from_pretrained(config['blip_model'], torch_dtype=torch.float16)
         self.vision_model = tmp_blip.vision_model
         self.qformer = tmp_blip.qformer
         self.query_tokens = tmp_blip.query_tokens
@@ -51,14 +50,14 @@ class PhoBERT_BLIP2_EfficientNet_MultiTask(nn.Module):
 
         # --- PhoBERT ---
         print("⏳ Đang load PhoBERT...")
-        self.phobert = AutoModel.from_pretrained(CONFIG['text_model'])
+        self.phobert = AutoModel.from_pretrained(config['text_model'])
 
         # --- Fusion ---
         embed_dim = 768
         self.fusion = CrossAttentionFusion(visual_dim=768, text_dim=768, embed_dim=embed_dim)
-        self.type_emb = nn.Embedding(num_q_types + 1, CONFIG['type_embed_dim'])
+        self.type_emb = nn.Embedding(num_q_types + 1, config['type_embed_dim'])
 
-        in_features = embed_dim + CONFIG['type_embed_dim']
+        in_features = embed_dim + config['type_embed_dim']
 
         self.classifier = nn.Sequential(
             nn.Linear(in_features, 512),
