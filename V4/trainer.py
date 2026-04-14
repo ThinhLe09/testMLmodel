@@ -89,7 +89,7 @@ def train(config):
     print(f"Type loss weights: {config['type_loss_weights']}")
     print("Bắt đầu huấn luyện...")
 
-    for epoch in range(CONFIG['epochs']):
+    for epoch in range(config['epochs']):
         # --- TRAIN ---
         model.train()
         train_ans_correct, train_type_correct, train_total = 0, 0, 0
